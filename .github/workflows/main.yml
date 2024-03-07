@@ -1,0 +1,43 @@
+name: Build and Deploy Nginx
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Build Docker image
+      run: |
+        docker build -t my-nginx-image:${{ github.sha }} .
+        docker push my-nginx-image:${{ github.sha }}
+
+    - name: Run security checks
+      run: |
+        # Install Trivy
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.19.2
+
+        # Scan the Docker image
+        trivy image --format template --template "@contrib/templates/github-issue.tpl my-nginx-image:${{ github.sha }}"
+
+    - name: Deploy to Kubernetes
+      uses: google-github-actions/kubernetes-image-deploy@main
+      with:
+        kubernetes-service-suffix: "-${{ github.sha }}"
+        kubernetes-namespace: my-nginx-namespace
+        kubernetes-secret-name: my-nginx-secret
+        kubernetes-docker-image: my-nginx-image:${{ github.sha }}
+        kubernetes-docker-registry-url: my-docker-registry.com
+        kubernetes-docker-registry-username: ${{ secrets.KUBE_USERNAME }}
+        kubernetes-docker-registry-password: ${{ secrets.KUBE_PASSWORD }}
+        kubernetes-context: my-kubernetes-context
+        kubernetes-cluster-ca-cert: ${{ secrets.KUBE_CA_CERT }}
+        kubernetes-extra-args: |
+          - --validate=false
+          - --record
