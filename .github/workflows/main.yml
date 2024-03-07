@@ -1,43 +1,51 @@
-name: Build and Deploy Nginx
-
-on:
-  push:
-    branches:
-      - main
+on: [push]
 
 jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
+   build:
+      runs-on: ubuntu-latest
+      steps:
+         - uses: actions/checkout@master
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+         - uses: Azure/docker-login@v1
+           with:
+              login-server: contoso.azurecr.io
+              username: ${{ secrets.REGISTRY_USERNAME }}
+              password: ${{ secrets.REGISTRY_PASSWORD }}
+        - name: Build Docker image
+         run: |
+              docker build . -t nginx:${{ github.sha }}
+              docker push nginx:${{ github.sha }}
 
-    - name: Build Docker image
-      run: |
-        docker build -t my-nginx-image:${{ github.sha }} .
-        docker push my-nginx-image:${{ github.sha }}
-
-    - name: Run security checks
-      run: |
+        - name: Run security checks
+        run: |
         # Install Trivy
         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.19.2
 
         # Scan the Docker image
         trivy image --format template --template "@contrib/templates/github-issue.tpl my-nginx-image:${{ github.sha }}"
 
-    - name: Deploy to Kubernetes
-      uses: google-github-actions/kubernetes-image-deploy@main
-      with:
-        kubernetes-service-suffix: "-${{ github.sha }}"
-        kubernetes-namespace: my-nginx-namespace
-        kubernetes-secret-name: my-nginx-secret
-        kubernetes-docker-image: my-nginx-image:${{ github.sha }}
-        kubernetes-docker-registry-url: my-docker-registry.com
-        kubernetes-docker-registry-username: ${{ secrets.KUBE_USERNAME }}
-        kubernetes-docker-registry-password: ${{ secrets.KUBE_PASSWORD }}
-        kubernetes-context: my-kubernetes-context
-        kubernetes-cluster-ca-cert: ${{ secrets.KUBE_CA_CERT }}
-        kubernetes-extra-args: |
-          - --validate=false
-          - --record
+        - uses: azure/setup-kubectl@v2.0
+        - name: Deploy to Kubernetes
+         # Set the target AKS cluster.
+         - uses: Azure/aks-set-context@v1
+           with:
+              creds: '${{ secrets.AZURE_CREDENTIALS }}'
+              cluster-name: contoso
+              resource-group: contoso-rg
+
+         - uses: Azure/k8s-create-secret@v1.1
+           with:
+              container-registry-url: contoso.azurecr.io
+              container-registry-username: ${{ secrets.REGISTRY_USERNAME }}
+              container-registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+              secret-name: demo-k8s-secret
+
+         - uses: Azure/k8s-deploy@v4
+           with:
+              action: deploy
+              manifests: |
+                 manifests/statefulset.yml
+              images: |
+                 nginx:${{ github.sha }}
+              imagepullsecrets: |
+                 demo-k8s-secret
